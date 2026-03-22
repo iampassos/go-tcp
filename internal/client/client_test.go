@@ -17,4 +17,15 @@ func TestHandshake(t *testing.T) {
 			t.Fatalf("got state %d, wanted %d", client.State, SYN_SENT)
 		}
 	})
+
+	t.Run("client receives SYN/ACK and changes state", func(t *testing.T) {
+		err := client.ReceiveHandshake()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if client.State != SYN_RECEIVED {
+			t.Fatalf("got state %d, wanted %d", client.State, SYN_RECEIVED)
+		}
+	})
 }

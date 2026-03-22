@@ -56,4 +56,15 @@ func TestHandshake(t *testing.T) {
 			t.Fatalf("got state %d, wanted %d", client.State, SYN_RECEIVED)
 		}
 	})
+
+	t.Run("client sends ACK and establishes connection", func(t *testing.T) {
+		err := client.EndHandshake()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if client.State != ESTABLISHED {
+			t.Fatalf("got state %d, wanted %d", client.State, SYN_RECEIVED)
+		}
+	})
 }

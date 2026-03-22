@@ -13,6 +13,7 @@ const (
 	CLOSED State = iota
 	SYN_SENT
 	SYN_RECEIVED
+	ESTABLISHED
 )
 
 var (
@@ -58,4 +59,17 @@ func (c *Client) ReceiveHandshake() error {
 	}
 
 	return ErrSynAckNotReceived
+}
+
+func (c *Client) EndHandshake() error {
+	packet := packet.Packet{Segment: tcp.Segment{Header: tcp.Header{Ack: true}}}
+
+	err := c.NetworkLayer.SendPacket(packet)
+	if err != nil {
+		return err
+	}
+
+	c.State = ESTABLISHED
+
+	return nil
 }

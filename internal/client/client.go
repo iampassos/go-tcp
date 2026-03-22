@@ -19,18 +19,24 @@ var (
 	ErrSynAckNotReceived = errors.New("SYN/ACK was not received")
 )
 
-type Client struct {
-	State State
+type NetworkLayer interface {
+	SendPacket(packet.Packet) error
+	ReceivePacket() (*packet.Packet, error)
 }
 
-func NewClient() *Client {
-	return &Client{State: CLOSED}
+type Client struct {
+	NetworkLayer NetworkLayer
+	State        State
+}
+
+func NewClient(nl NetworkLayer) *Client {
+	return &Client{NetworkLayer: nl, State: CLOSED}
 }
 
 func (c *Client) StartHandshake() error {
 	packet := packet.Packet{Segment: tcp.Segment{Header: tcp.Header{Syn: true}}}
 
-	err := c.SendPacket(packet)
+	err := c.NetworkLayer.SendPacket(packet)
 	if err != nil {
 		return err
 	}
@@ -41,7 +47,7 @@ func (c *Client) StartHandshake() error {
 }
 
 func (c *Client) ReceiveHandshake() error {
-	packet, err := c.ReceivePacket()
+	packet, err := c.NetworkLayer.ReceivePacket()
 	if err != nil {
 		return err
 	}
@@ -52,13 +58,4 @@ func (c *Client) ReceiveHandshake() error {
 	}
 
 	return ErrSynAckNotReceived
-}
-
-func (c *Client) ReceivePacket() (*packet.Packet, error) {
-	packet := packet.Packet{Segment: tcp.Segment{Header: tcp.Header{Syn: true, Ack: true}}}
-	return &packet, nil
-}
-
-func (c *Client) SendPacket(p packet.Packet) error {
-	return nil
 }

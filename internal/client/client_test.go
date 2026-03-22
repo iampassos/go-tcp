@@ -2,23 +2,13 @@ package client
 
 import (
 	"testing"
-
-	"github.com/iampassos/go-tcp/internal/server"
 )
 
 func TestHandshake(t *testing.T) {
-	sv := server.NewServer()
-	go sv.Start()
-
 	client := NewClient()
 
-	err := client.Init()
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	t.Run("client sends SYN and changes state", func(t *testing.T) {
-		err := client.InitHandshake()
+		err := client.StartHandshake()
 		if err != nil {
 			t.Fatal(err)
 		}

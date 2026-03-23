@@ -17,49 +17,48 @@ func (nl *NetworkLayerStub) ReceiveSegment() (*Segment, error) {
 	return nl.receiveSegment()
 }
 
-func TestHandshake(t *testing.T) {
-	t.Run("startHandshake sends SYN and changes state", func(t *testing.T) {
-		stub := NetworkLayerStub{sendSegment: func(s Segment) error { return nil }}
-		connection := NewConnection(&stub)
+func TestStartHandshake(t *testing.T) {
+	stub := NetworkLayerStub{sendSegment: func(s Segment) error { return nil }}
+	connection := NewConnection(&stub)
 
-		err := connection.startHandshake()
-		if err != nil {
-			t.Fatal(err)
-		}
+	err := connection.startHandshake()
+	if err != nil {
+		t.Fatal(err)
+	}
 
-		if connection.State != SYN_SENT {
-			t.Fatalf("got state %d, wanted %d", connection.State, SYN_SENT)
-		}
-	})
+	if connection.State != SYN_SENT {
+		t.Fatalf("got state %d, wanted %d", connection.State, SYN_SENT)
+	}
 
-	t.Run("receiveHandshake receives SYN/ACK and changes state", func(t *testing.T) {
-		stub := NetworkLayerStub{
-			receiveSegment: func() (*Segment, error) {
-				return &Segment{Header: Header{Syn: true, Ack: true}}, nil
-			}}
-		connection := NewConnection(&stub)
+}
 
-		err := connection.receiveHandshake()
-		if err != nil {
-			t.Fatal(err)
-		}
+func TestReceiveHandshake(t *testing.T) {
+	stub := NetworkLayerStub{
+		receiveSegment: func() (*Segment, error) {
+			return &Segment{Header: Header{Syn: true, Ack: true}}, nil
+		}}
+	connection := NewConnection(&stub)
 
-		if connection.State != SYN_RECEIVED {
-			t.Fatalf("got state %d, wanted %d", connection.State, SYN_RECEIVED)
-		}
-	})
+	err := connection.receiveHandshake()
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	t.Run("endHandshake sends ACK and changes state", func(t *testing.T) {
-		stub := NetworkLayerStub{sendSegment: func(s Segment) error { return nil }}
-		connection := NewConnection(&stub)
+	if connection.State != SYN_RECEIVED {
+		t.Fatalf("got state %d, wanted %d", connection.State, SYN_RECEIVED)
+	}
+}
 
-		err := connection.endHandshake()
-		if err != nil {
-			t.Fatal(err)
-		}
+func TestEndHandshake(t *testing.T) {
+	stub := NetworkLayerStub{sendSegment: func(s Segment) error { return nil }}
+	connection := NewConnection(&stub)
 
-		if connection.State != ESTABLISHED {
-			t.Fatalf("got state %d, wanted %d", connection.State, SYN_RECEIVED)
-		}
-	})
+	err := connection.endHandshake()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if connection.State != ESTABLISHED {
+		t.Fatalf("got state %d, wanted %d", connection.State, SYN_RECEIVED)
+	}
 }

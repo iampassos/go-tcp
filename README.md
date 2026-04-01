@@ -1,6 +1,6 @@
 # Go-TCP Infraestrutura de Comunicação
 
-Projeto da disciplina para simular, na camada de aplicação, um transporte confiável cliente-servidor sobre sockets. As funcionalidades presentes no momento são:
+Projeto da disciplina (GRUPO 1) para simular, na camada de aplicação, um transporte confiável cliente-servidor sobre sockets. As funcionalidades presentes no momento são:
 
 - estabelecer conexão entre cliente e servidor via socket;
 - realizar o handshake inicial;

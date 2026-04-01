@@ -19,6 +19,7 @@ type ClientTransporter interface {
 type ServerTransporter interface {
 	Accept() (ClientTransporter, error)
 	Close() error
+	addr() string
 }
 
 type Message struct {

@@ -94,3 +94,7 @@ func (t *ServerTransport) Close() error {
 
 	return nil
 }
+
+func (t *ServerTransport) addr() string {
+	return t.listener.Addr().String()
+}

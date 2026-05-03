@@ -28,6 +28,4 @@ func main() {
 
 func handleConnection(connection *tcp.Connection) {
 	defer connection.Close()
-
-	log.Println("New connection established!")
 }

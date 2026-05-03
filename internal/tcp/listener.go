@@ -2,6 +2,8 @@ package tcp
 
 import (
 	"errors"
+	"log"
+	"math/rand"
 )
 
 type Listener struct {
@@ -25,7 +27,7 @@ func (l *Listener) Accept() (*Connection, error) {
 		return nil, err
 	}
 
-	connection := &Connection{State: LISTEN, transport: clientTransport}
+	connection := &Connection{State: LISTEN, transport: clientTransport, ISN: rand.Int()}
 
 	segment, err := connection.transport.Receive()
 	if err != nil {
@@ -39,8 +41,11 @@ func (l *Listener) Accept() (*Connection, error) {
 	}
 
 	connection.State = SYN_RECEIVED
+	connection.MaxChars = segment.Message.MaxChars
+	connection.Protocol = segment.Message.Protocol
+	connection.WindowSize = 5
 
-	err = connection.transport.Send(Segment{Header: Header{Flags: Flags{Syn: true, Ack: true}}, Message: &Message{MaxChars: 30, Protocol: "gbn"}})
+	err = connection.transport.Send(Segment{Header: Header{Flags: Flags{Syn: true, Ack: true}, WindowSize: connection.WindowSize, Ack: segment.Header.Seq + 1, Seq: connection.ISN}, Message: Message{MaxChars: connection.MaxChars, Protocol: connection.Protocol}})
 	if err != nil {
 		connection.transport.Close()
 		return nil, err
@@ -58,6 +63,8 @@ func (l *Listener) Accept() (*Connection, error) {
 	}
 
 	connection.State = ESTABLISHED
+
+	log.Printf("[SERVER] Connection established with %v. MaxChars: %v, Protocol: %v, WindowSize: %v", clientTransport.addr(), connection.MaxChars, connection.Protocol, connection.WindowSize)
 
 	return connection, nil
 }

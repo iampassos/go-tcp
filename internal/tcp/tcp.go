@@ -14,6 +14,7 @@ type ClientTransporter interface {
 	Send(segment Segment) error
 	Receive() (*Segment, error)
 	Close() error
+	addr() string
 }
 
 type ServerTransporter interface {
@@ -33,10 +34,13 @@ type Flags struct {
 }
 
 type Header struct {
-	Flags Flags
+	Flags      Flags
+	WindowSize int
+	Seq        int
+	Ack        int
 }
 
 type Segment struct {
 	Header  Header
-	Message *Message
+	Message Message
 }

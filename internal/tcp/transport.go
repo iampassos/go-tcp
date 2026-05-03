@@ -63,6 +63,10 @@ func (t *ClientTransport) Close() error {
 	return nil
 }
 
+func (t *ClientTransport) addr() string {
+	return t.conn.RemoteAddr().String()
+}
+
 func InitServerTransport(port string) (*ServerTransport, error) {
 	listener, err := net.Listen("tcp", ":"+port)
 	if err != nil {

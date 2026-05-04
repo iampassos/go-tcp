@@ -139,7 +139,9 @@ func (c *Connection) Receive() (string, error) {
 
 	log.Printf(`[SERVER] Received message "%s" from %v`, text, c.PeerAddr)
 
-	c.Seq = keys[len(keys)-1] + 1
+	if len(keys) > 0 {
+		c.Seq = keys[len(keys)-1] + 1
+	}
 
 	return text, nil
 }

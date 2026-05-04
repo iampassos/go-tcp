@@ -57,7 +57,7 @@ func TestDial(t *testing.T) {
 				mu.Lock()
 			}()
 
-			client, err := Dial(listener.listener.Addr().String(), Message{Protocol: "gbn", MaxChars: 30})
+			client, err := Dial(listener.listener.Addr().String(), GoBackN, 30)
 			if err != nil && !tt.wantErr {
 				t.Fatalf("error while dialing: %v", err)
 			}

@@ -1,13 +1,14 @@
 package tcp
 
 import (
-	"bytes"
 	"encoding/gob"
 	"net"
 )
 
 type ClientTransport struct {
-	conn net.Conn
+	conn    net.Conn
+	encoder *gob.Encoder
+	decoder *gob.Decoder
 }
 
 type ServerTransport struct {
@@ -20,31 +21,23 @@ func InitClientTransport(addr string) (*ClientTransport, error) {
 		return nil, err
 	}
 
-	transport := &ClientTransport{conn: conn}
+	transport := &ClientTransport{
+		conn:    conn,
+		encoder: gob.NewEncoder(conn),
+		decoder: gob.NewDecoder(conn),
+	}
 
 	return transport, nil
 }
 
 func (t *ClientTransport) Send(segment Segment) error {
-	var buf bytes.Buffer
-
-	err := gob.NewEncoder(&buf).Encode(segment)
-	if err != nil {
-		return err
-	}
-
-	_, err = t.conn.Write(buf.Bytes())
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return t.encoder.Encode(segment)
 }
 
 func (t *ClientTransport) Receive() (*Segment, error) {
 	var segment Segment
 
-	err := gob.NewDecoder(t.conn).Decode(&segment)
+	err := t.decoder.Decode(&segment)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +78,11 @@ func (t *ServerTransport) Accept() (ClientTransporter, error) {
 		return nil, err
 	}
 
-	return &ClientTransport{conn: conn}, nil
+	return &ClientTransport{
+		conn:    conn,
+		encoder: gob.NewEncoder(conn),
+		decoder: gob.NewDecoder(conn),
+	}, nil
 }
 
 func (t *ServerTransport) Close() error {

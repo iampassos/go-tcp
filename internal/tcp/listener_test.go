@@ -51,12 +51,16 @@ func TestListener(t *testing.T) {
 				}
 				defer client.Close()
 
-				for _, s := range tt.segments {
+				for i, s := range tt.segments {
 					client.Send(s)
+					if i == 0 && s.Header.Flags.Syn {
+						client.Receive()
+					}
 				}
 			}()
 
-			connection, err := listener.Accept()
+			connection, err := listener.Accept(5)
+
 			if err != nil && !tt.wantErr {
 				t.Fatalf("error while accepting: %v", err)
 			}

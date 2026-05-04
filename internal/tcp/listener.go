@@ -1,7 +1,6 @@
 package tcp
 
 import (
-	"errors"
 	"log"
 	"math/rand"
 )
@@ -21,13 +20,17 @@ func Listen(port string) (*Listener, error) {
 	return listener, nil
 }
 
-func (l *Listener) Accept() (*Connection, error) {
+func (l *Listener) Accept(windowSize int) (*Connection, error) {
+	if windowSize <= 0 || windowSize > 5 {
+		return nil, ErrInvalidWindowSize
+	}
+
 	clientTransport, err := l.transport.Accept()
 	if err != nil {
 		return nil, err
 	}
 
-	connection := &Connection{State: LISTEN, transport: clientTransport, ISN: rand.Int()}
+	connection := &Connection{State: LISTEN, transport: clientTransport, ISN: rand.Intn(1000), PeerAddr: clientTransport.addr()}
 
 	segment, err := connection.transport.Receive()
 	if err != nil {
@@ -37,15 +40,19 @@ func (l *Listener) Accept() (*Connection, error) {
 
 	if segment == nil || !segment.Header.Flags.Syn {
 		connection.transport.Close()
-		return nil, errors.New("did not receive syn for handshake")
+		return nil, ErrSynNotReceived
 	}
 
 	connection.State = SYN_RECEIVED
 	connection.MaxChars = segment.Message.MaxChars
 	connection.Protocol = segment.Message.Protocol
-	connection.WindowSize = 5
+	connection.WindowSize = windowSize
+	connection.Seq = segment.Header.Seq + 1
 
-	err = connection.transport.Send(Segment{Header: Header{Flags: Flags{Syn: true, Ack: true}, WindowSize: connection.WindowSize, Ack: segment.Header.Seq + 1, Seq: connection.ISN}, Message: Message{MaxChars: connection.MaxChars, Protocol: connection.Protocol}})
+	err = connection.transport.Send(Segment{
+		Header:  Header{Flags: Flags{Syn: true, Ack: true}, WindowSize: connection.WindowSize, Ack: segment.Header.Seq + 1, Seq: connection.ISN},
+		Message: Message{MaxChars: connection.MaxChars, Protocol: connection.Protocol}},
+	)
 	if err != nil {
 		connection.transport.Close()
 		return nil, err
@@ -59,7 +66,7 @@ func (l *Listener) Accept() (*Connection, error) {
 
 	if segment == nil || !segment.Header.Flags.Ack {
 		connection.transport.Close()
-		return nil, errors.New("did not receive ack for handshake")
+		return nil, ErrAckNotReceived
 	}
 
 	connection.State = ESTABLISHED

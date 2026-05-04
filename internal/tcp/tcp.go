@@ -24,13 +24,15 @@ type ServerTransporter interface {
 }
 
 type Message struct {
-	Protocol string
+	Text     string
+	Protocol Protocol
 	MaxChars int
 }
 
 type Flags struct {
 	Syn bool
 	Ack bool
+	Fin bool
 }
 
 type Header struct {
@@ -43,4 +45,12 @@ type Header struct {
 type Segment struct {
 	Header  Header
 	Message Message
+}
+
+func Checksum(data string) int {
+	sum := 0
+	for _, b := range []byte(data) {
+		sum += int(b)
+	}
+	return sum
 }

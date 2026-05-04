@@ -46,11 +46,3 @@ type Segment struct {
 	Header  Header
 	Message Message
 }
-
-func Checksum(data string) int {
-	sum := 0
-	for _, b := range []byte(data) {
-		sum += int(b)
-	}
-	return sum
-}

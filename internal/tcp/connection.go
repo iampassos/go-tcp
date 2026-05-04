@@ -3,6 +3,7 @@ package tcp
 import (
 	"log"
 	"math/rand"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -71,7 +72,7 @@ func (c *Connection) Receive() (string, error) {
 		return "", ErrConnectionNotEstablished
 	}
 
-	var buffer []string
+	buffer := make(map[int]string)
 	expectedSeq := c.Seq
 
 	for {
@@ -89,9 +90,27 @@ func (c *Connection) Receive() (string, error) {
 
 		seqNum := segment.Header.Seq
 
-		if seqNum == expectedSeq {
-			buffer = append(buffer, segment.Message.Text)
+		if c.Protocol == GoBackN {
+			if seqNum == expectedSeq {
+				buffer[seqNum] = segment.Message.Text
 
+				err := c.transport.Send(Segment{Header{Ack: seqNum}, Message{}})
+				if err != nil {
+					return "", err
+				}
+
+				log.Printf(`[SERVER] Sending segment with ACK %v to %v`, seqNum, c.PeerAddr)
+
+				expectedSeq = seqNum + 1
+			} else {
+				err := c.transport.Send(Segment{Header{Ack: expectedSeq - 1}, Message{}})
+				if err != nil {
+					return "", err
+				}
+			}
+		}
+
+		if c.Protocol == SelectiveRepeat {
 			err := c.transport.Send(Segment{Header{Ack: seqNum}, Message{}})
 			if err != nil {
 				return "", err
@@ -99,22 +118,28 @@ func (c *Connection) Receive() (string, error) {
 
 			log.Printf(`[SERVER] Sending segment with ACK %v to %v`, seqNum, c.PeerAddr)
 
-			expectedSeq = seqNum + 1
-
-		} else {
-			err := c.transport.Send(Segment{Header{Ack: expectedSeq - 1}, Message{}})
-			if err != nil {
-				return "", err
-			}
+			buffer[seqNum] = segment.Message.Text
 		}
 
 	}
 
-	text := strings.Join(buffer, "")
+	keys := make([]int, 0, len(buffer))
+	for k := range buffer {
+		keys = append(keys, k)
+	}
+
+	sort.Ints(keys)
+
+	values := make([]string, 0, len(buffer))
+	for _, k := range keys {
+		values = append(values, buffer[k])
+	}
+
+	text := strings.Join(values, "")
 
 	log.Printf(`[SERVER] Received message "%s" from %v`, text, c.PeerAddr)
 
-	c.Seq = expectedSeq
+	c.Seq = keys[len(keys)-1] + 1
 
 	return text, nil
 }
@@ -163,6 +188,8 @@ func (c *Connection) Send(text string) error {
 		}
 	})
 
+	buffer := make([]bool, len(window))
+
 	wg.Go(func() {
 		for base < len(window) {
 			segment, err := c.transport.Receive()
@@ -180,6 +207,14 @@ func (c *Connection) Send(text string) error {
 					base = ackIndex + 1
 					ch <- base
 				}
+			}
+
+			if c.Protocol == SelectiveRepeat {
+				buffer[ackIndex] = true
+				for base < len(window) && buffer[base] {
+					base++
+				}
+				ch <- base
 			}
 		}
 	})

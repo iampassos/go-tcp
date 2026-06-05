@@ -332,6 +332,7 @@ Servidor:
 
 ```text
 Window size (1-5 default is 5): 5
+Encryption key (default none):
 ```
 
 Cliente:
@@ -400,6 +401,7 @@ O projeto inclui testes automatizados para os principais fluxos:
 | Teste | Cobertura |
 | --- | --- |
 | `TestDial` | Handshake do cliente |
+| `TestDialWithKey` | Rejeição de conexão quando a criptografia não bate |
 | `TestListener` | Handshake do servidor |
 | `TestSend` | Envio normal, erro de conexão, perda, corrupção e criptografia |
 | `TestReceive` | Recebimento normal, erro de conexão e `NAK` por corrupção |

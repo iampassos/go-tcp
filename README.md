@@ -42,6 +42,7 @@ Os objetivos específicos do trabalho são:
 | Reagir a erro | `NAK` e retransmissão |
 | Reagir a perda | Temporizador e retransmissão |
 | Suportar Go-Back-N e Repetição Seletiva | Modo escolhido pelo cliente |
+| Criptografar mensagens | AES-GCM com chave simétrica pré-compartilhada |
 
 ## 3. Requisitos da Especificação
 
@@ -119,14 +120,17 @@ Cada pacote da camada de aplicação é representado por um `Segment`.
 | `Message` | `Text` | Carga útil, com no máximo 4 caracteres |
 | `Message` | `Protocol` | Modo `gbn` ou `sr` |
 | `Message` | `MaxChars` | Tamanho máximo da mensagem |
+| `Message` | `Encrypted` | Indica uso de criptografia simétrica |
+| `Message` | `KeyHash` | Hash usado para validar se cliente e servidor usam a mesma chave |
 | `Checksum` | - | Soma de verificação do segmento |
 
 ### 5.3 Mensagens do Protocolo
 
 | Mensagem | Enviada por | Flags | Campos relevantes | Resposta esperada |
 | --- | --- | --- | --- | --- |
-| Pedido de conexão | Cliente | `SYN` | `Seq`, `Protocol`, `MaxChars` | `SYN+ACK` |
-| Aceite de conexão | Servidor | `SYN`, `ACK` | `Seq`, `Ack`, `WindowSize` | `ACK` final |
+| Pedido de conexão | Cliente | `SYN` | `Seq`, `Protocol`, `MaxChars`, `Encrypted`, `KeyHash` | `SYN+ACK` |
+| Aceite de conexão | Servidor | `SYN`, `ACK` | `Seq`, `Ack`, `WindowSize`, `Encrypted`, `KeyHash` | `ACK` final |
+| Rejeição de criptografia | Servidor | `NAK` | `Ack` | Cliente encerra com erro |
 | Confirmação final | Cliente | `ACK` | `Seq`, `Ack` | Conexão estabelecida |
 | Dados | Cliente | nenhuma flag especial | `Seq`, `Text`, `Checksum` | `ACK` ou `NAK` |
 | Confirmação positiva | Servidor | `ACK` | `Ack` | Cliente avança janela |
@@ -145,6 +149,8 @@ três vias:
 | 3 | Cliente | Servidor | `ACK` | Confirma recebimento e entra em `ESTABLISHED` |
 
 Após essas três etapas, cliente e servidor consideram a conexão estabelecida.
+Se cliente e servidor não usarem o mesmo modo de criptografia e a mesma chave, o
+servidor responde `NAK` e encerra a tentativa de conexão.
 
 ## 6. Funcionamento do Envio e Recebimento
 
@@ -251,14 +257,24 @@ As falhas são determinísticas: se o usuário escolher o segmento 2, o segmento
 será afetado. A falha é aplicada uma vez para permitir que a retransmissão envie o
 segmento correto depois.
 
-## 9. Manual de Utilização
+## 9. Pontos Extras
 
-### 9.1 Pré-requisitos
+O algoritmo de integridade usa checksum de 16 bits com complemento de 1, conforme
+o modelo apresentado por Kurose para detecção de erro.
+
+A criptografia simétrica é opcional e usa AES-GCM. Quando cliente e servidor
+informam a mesma chave, o texto original é criptografado antes da fragmentação e
+descriptografado após a remontagem no servidor. Se a chave ficar vazia nos dois
+lados, a comunicação segue sem criptografia.
+
+## 10. Manual de Utilização
+
+### 10.1 Pré-requisitos
 
 - Go `1.25.7` ou superior instalado, conforme `go.mod`.
 - Dois terminais: um para o servidor e outro para o cliente.
 
-### 9.2 Executar o Servidor
+### 10.2 Executar o Servidor
 
 No primeiro terminal:
 
@@ -270,6 +286,7 @@ O servidor solicitará:
 
 ```text
 Window size (1-5 default is 5):
+Encryption key (default none):
 ```
 
 Valores aceitos:
@@ -280,7 +297,7 @@ Valores aceitos:
 | `1` a `5` | Usa valor informado |
 | maior que `5` | Ajusta para 5 |
 
-### 9.3 Executar o Cliente
+### 10.3 Executar o Cliente
 
 No segundo terminal:
 
@@ -297,6 +314,7 @@ O cliente solicitará:
 | `Max chars` | `30` | Limite máximo por mensagem |
 | `Segments to drop once` | `2` ou `2,4` | Segmentos que serão perdidos |
 | `Segments to corrupt once` | `3` | Segmentos que serão corrompidos |
+| `Encryption key` | `segredo` | Chave simétrica opcional |
 
 Depois do handshake, o cliente mostra o prompt:
 
@@ -306,7 +324,7 @@ Depois do handshake, o cliente mostra o prompt:
 
 Digite uma mensagem para enviar. Digite `exit` para encerrar o cliente.
 
-### 9.4 Exemplos de Execução
+### 10.4 Exemplos de Execução
 
 #### Exemplo 1: envio sem falhas
 
@@ -324,6 +342,7 @@ Protocol (gbn/sr default is gbn): gbn
 Max chars (min 30 default is 30): 30
 Segments to drop once (comma-separated, default none):
 Segments to corrupt once (comma-separated, default none):
+Encryption key (default none):
 > Hello, World!
 ```
 
@@ -338,6 +357,7 @@ Cliente:
 Protocol (gbn/sr default is gbn): gbn
 Segments to drop once (comma-separated, default none): 2
 Segments to corrupt once (comma-separated, default none):
+Encryption key (default none):
 > Hello, World!
 ```
 
@@ -352,13 +372,14 @@ Cliente:
 Protocol (gbn/sr default is gbn): sr
 Segments to drop once (comma-separated, default none):
 Segments to corrupt once (comma-separated, default none): 2
+Encryption key (default none):
 > Hello, World!
 ```
 
 Resultado esperado: o servidor detecta checksum inválido no segmento 2, envia
 `NAK 2`, e o cliente retransmite apenas o segmento 2.
 
-## 10. Evidências de Transporte Confiável
+## 11. Evidências de Transporte Confiável
 
 | Característica exigida | Como verificar na execução |
 | --- | --- |
@@ -370,8 +391,9 @@ Resultado esperado: o servidor detecta checksum inválido no segmento 2, envia
 | Janela/paralelismo | Usar janela maior que 1 e observar vários segmentos enviados antes das confirmações |
 | Go-Back-N | Perder segmento em `gbn` e observar retransmissão a partir dele |
 | Repetição Seletiva | Corromper segmento em `sr` e observar retransmissão isolada |
+| Criptografia simétrica | Usar a mesma chave no cliente e servidor e observar a mensagem final correta |
 
-## 11. Testes Automatizados
+## 12. Testes Automatizados
 
 O projeto inclui testes automatizados para os principais fluxos:
 
@@ -379,7 +401,7 @@ O projeto inclui testes automatizados para os principais fluxos:
 | --- | --- |
 | `TestDial` | Handshake do cliente |
 | `TestListener` | Handshake do servidor |
-| `TestSend` | Envio normal, erro de conexão, perda e corrupção |
+| `TestSend` | Envio normal, erro de conexão, perda, corrupção e criptografia |
 | `TestReceive` | Recebimento normal, erro de conexão e `NAK` por corrupção |
 
 Para executar:
@@ -394,7 +416,7 @@ Para verificar condições de corrida:
 go test -race ./...
 ```
 
-## 12. Conclusão
+## 13. Conclusão
 
 A aplicação implementa um protocolo de transporte confiável na camada de aplicação,
 com conexão cliente-servidor, handshake inicial, fragmentação de mensagens,

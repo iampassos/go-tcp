@@ -8,6 +8,7 @@ func TestListener(t *testing.T) {
 	tests := []struct {
 		name     string
 		segments []Segment
+		key      string
 		state    State
 		wantErr  bool
 	}{
@@ -17,6 +18,15 @@ func TestListener(t *testing.T) {
 				withChecksum(Segment{Header: Header{Flags: Flags{Syn: true, Ack: false}}, Message: Message{Protocol: GoBackN, MaxChars: 30}}),
 				withChecksum(Segment{Header: Header{Flags: Flags{Syn: false, Ack: true}}}),
 			},
+			state: ESTABLISHED,
+		},
+		{
+			name: "encrypted connection is established",
+			segments: []Segment{
+				withChecksum(Segment{Header: Header{Flags: Flags{Syn: true, Ack: false}}, Message: Message{Protocol: GoBackN, MaxChars: 30, Encrypted: true, KeyHash: keyHash("secret")}}),
+				withChecksum(Segment{Header: Header{Flags: Flags{Syn: false, Ack: true}}}),
+			},
+			key:   "secret",
 			state: ESTABLISHED,
 		},
 		{
@@ -59,7 +69,7 @@ func TestListener(t *testing.T) {
 				}
 			}()
 
-			connection, err := listener.Accept(5)
+			connection, err := listener.AcceptWithKey(5, tt.key)
 
 			if err != nil && !tt.wantErr {
 				t.Fatalf("error while accepting: %v", err)

@@ -24,9 +24,11 @@ type ServerTransporter interface {
 }
 
 type Message struct {
-	Text     string
-	Protocol Protocol
-	MaxChars int
+	Text      string
+	Protocol  Protocol
+	MaxChars  int
+	Encrypted bool
+	KeyHash   [32]byte
 }
 
 type Flags struct {

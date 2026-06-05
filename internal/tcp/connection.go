@@ -1,9 +1,16 @@
 package tcp
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	crand "crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
+	"errors"
+	"io"
 	"log"
-	"math/rand"
+	mrand "math/rand"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,6 +29,8 @@ type Connection struct {
 	Seq        int
 	Timeout    time.Duration
 	Faults     FaultConfig
+	Encrypted  bool
+	key        string
 	ackOnce    sync.Once
 	ackCh      chan Segment
 	ackErrCh   chan error
@@ -30,6 +39,10 @@ type Connection struct {
 const defaultTimeout = time.Second
 
 func Dial(addr string, protocol Protocol, maxChars int) (*Connection, error) {
+	return DialWithKey(addr, protocol, maxChars, "")
+}
+
+func DialWithKey(addr string, protocol Protocol, maxChars int, key string) (*Connection, error) {
 	if maxChars < 30 {
 		return nil, ErrMaxCharsMinimum
 	}
@@ -42,10 +55,17 @@ func Dial(addr string, protocol Protocol, maxChars int) (*Connection, error) {
 	if err != nil {
 		return nil, err
 	}
+	connected := false
+	defer func() {
+		if !connected {
+			clientTransport.Close()
+		}
+	}()
 
-	connection := &Connection{State: CLOSED, transport: clientTransport, ISN: rand.Intn(1000), PeerAddr: addr}
+	connection := &Connection{State: CLOSED, transport: clientTransport, ISN: mrand.Intn(1000), PeerAddr: addr}
+	connection.enableEncryption(key)
 
-	err = connection.transport.Send(withChecksum(Segment{Header: Header{Flags: Flags{Syn: true}, Seq: connection.ISN}, Message: Message{MaxChars: maxChars, Protocol: protocol}}))
+	err = connection.transport.Send(withChecksum(Segment{Header: Header{Flags: Flags{Syn: true}, Seq: connection.ISN}, Message: Message{MaxChars: maxChars, Protocol: protocol, Encrypted: connection.Encrypted, KeyHash: keyHash(key)}}))
 	if err != nil {
 		return nil, err
 	}
@@ -57,11 +77,17 @@ func Dial(addr string, protocol Protocol, maxChars int) (*Connection, error) {
 		return nil, err
 	}
 
+	if segment != nil && ValidChecksum(*segment) && segment.Header.Flags.Nak {
+		return nil, ErrEncryptionMismatch
+	}
 	if segment == nil || !segment.Header.Flags.Syn || !segment.Header.Flags.Ack {
 		return nil, ErrSynAckNotReceived
 	}
 	if !ValidChecksum(*segment) {
 		return nil, ErrSynAckNotReceived
+	}
+	if segment.Message.Encrypted != connection.Encrypted || segment.Message.KeyHash != keyHash(key) {
+		return nil, ErrEncryptionMismatch
 	}
 
 	connection.State = ESTABLISHED
@@ -69,6 +95,7 @@ func Dial(addr string, protocol Protocol, maxChars int) (*Connection, error) {
 	connection.MaxChars = segment.Message.MaxChars
 	connection.WindowSize = segment.Header.WindowSize
 	connection.Seq = connection.ISN + 1
+	connection.Encrypted = segment.Message.Encrypted
 
 	err = connection.transport.Send(withChecksum(Segment{Header: Header{Flags: Flags{Ack: true}, Ack: segment.Header.Seq + 1, Seq: segment.Header.Ack}}))
 	if err != nil {
@@ -77,6 +104,7 @@ func Dial(addr string, protocol Protocol, maxChars int) (*Connection, error) {
 
 	log.Printf("[CLIENT] Connection established with %v. MaxChars: %v, Protocol: %v, WindowSize: %v", clientTransport.conn.RemoteAddr().String(), connection.MaxChars, connection.Protocol, connection.WindowSize)
 
+	connected = true
 	return connection, nil
 }
 
@@ -159,6 +187,13 @@ func (c *Connection) Receive() (string, error) {
 	}
 
 	text := strings.Join(values, "")
+	if c.Encrypted {
+		var err error
+		text, err = decryptText(text, c.key)
+		if err != nil {
+			return "", ErrDecryptFailed
+		}
+	}
 
 	log.Printf(`[SERVER] Received message "%s" from %v`, text, c.PeerAddr)
 
@@ -181,13 +216,23 @@ func (c *Connection) Send(text string) error {
 
 	log.Printf(`[CLIENT] Sending message "%s"`, text)
 
+	payload := text
+	if c.Encrypted {
+		encrypted, err := encryptText(text, c.key)
+		if err != nil {
+			return err
+		}
+		payload = encrypted
+	}
+
 	var window []Segment
 	maxChars := 4
 
 	seq := c.Seq
-	for i := 0; i < len(runes); i += maxChars {
-		end := min(i+maxChars, len(runes))
-		t := string(runes[i:end])
+	payloadRunes := []rune(payload)
+	for i := 0; i < len(payloadRunes); i += maxChars {
+		end := min(i+maxChars, len(payloadRunes))
+		t := string(payloadRunes[i:end])
 		segment := Segment{Header: Header{Seq: seq}, Message: Message{Text: t}}
 		segment.Checksum = CalculateChecksum(segment)
 		window = append(window, segment)
@@ -403,6 +448,8 @@ func checksumBytes(segment Segment) []byte {
 	data = appendStringForChecksum(data, segment.Message.Text)
 	data = appendStringForChecksum(data, string(segment.Message.Protocol))
 	data = appendIntForChecksum(data, segment.Message.MaxChars)
+	data = appendBoolForChecksum(data, segment.Message.Encrypted)
+	data = append(data, segment.Message.KeyHash[:]...)
 	data = appendIntForChecksum(data, segment.Header.Seq)
 	data = appendIntForChecksum(data, segment.Header.Ack)
 	data = appendIntForChecksum(data, segment.Header.WindowSize)
@@ -447,4 +494,71 @@ func oneComplementChecksum(data []byte) uint16 {
 	}
 
 	return ^uint16(sum)
+}
+
+func (c *Connection) enableEncryption(key string) {
+	if key == "" {
+		return
+	}
+	c.Encrypted = true
+	c.key = key
+}
+
+func encryptText(text, key string) (string, error) {
+	gcm, err := newGCM(key)
+	if err != nil {
+		return "", err
+	}
+
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(crand.Reader, nonce); err != nil {
+		return "", err
+	}
+
+	ciphertext := gcm.Seal(nil, nonce, []byte(text), nil)
+	payload := append(nonce, ciphertext...)
+	return base64.StdEncoding.EncodeToString(payload), nil
+}
+
+func decryptText(text, key string) (string, error) {
+	gcm, err := newGCM(key)
+	if err != nil {
+		return "", err
+	}
+
+	payload, err := base64.StdEncoding.DecodeString(text)
+	if err != nil {
+		return "", err
+	}
+	if len(payload) < gcm.NonceSize() {
+		return "", errors.New("encrypted payload too short")
+	}
+
+	nonce := payload[:gcm.NonceSize()]
+	ciphertext := payload[gcm.NonceSize():]
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return "", err
+	}
+	return string(plaintext), nil
+}
+
+func newGCM(key string) (cipher.AEAD, error) {
+	block, err := aes.NewCipher(encryptionKey(key))
+	if err != nil {
+		return nil, err
+	}
+	return cipher.NewGCM(block)
+}
+
+func encryptionKey(key string) []byte {
+	sum := sha256.Sum256([]byte("enc:" + key))
+	return sum[:]
+}
+
+func keyHash(key string) [32]byte {
+	if key == "" {
+		return [32]byte{}
+	}
+	return sha256.Sum256([]byte("check:" + key))
 }

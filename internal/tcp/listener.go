@@ -21,6 +21,10 @@ func Listen(port string) (*Listener, error) {
 }
 
 func (l *Listener) Accept(windowSize int) (*Connection, error) {
+	return l.AcceptWithKey(windowSize, "")
+}
+
+func (l *Listener) AcceptWithKey(windowSize int, key string) (*Connection, error) {
 	if windowSize <= 0 || windowSize > 5 {
 		return nil, ErrInvalidWindowSize
 	}
@@ -46,6 +50,11 @@ func (l *Listener) Accept(windowSize int) (*Connection, error) {
 		connection.transport.Close()
 		return nil, ErrSynNotReceived
 	}
+	if segment.Message.Encrypted != (key != "") || segment.Message.KeyHash != keyHash(key) {
+		_ = connection.transport.Send(withChecksum(Segment{Header: Header{Flags: Flags{Nak: true}, Ack: segment.Header.Seq}}))
+		connection.transport.Close()
+		return nil, ErrEncryptionMismatch
+	}
 
 	if segment.Message.MaxChars < 30 {
 		connection.transport.Close()
@@ -62,10 +71,11 @@ func (l *Listener) Accept(windowSize int) (*Connection, error) {
 	connection.Protocol = segment.Message.Protocol
 	connection.WindowSize = windowSize
 	connection.Seq = segment.Header.Seq + 1
+	connection.enableEncryption(key)
 
 	err = connection.transport.Send(withChecksum(Segment{
 		Header:  Header{Flags: Flags{Syn: true, Ack: true}, WindowSize: connection.WindowSize, Ack: segment.Header.Seq + 1, Seq: connection.ISN},
-		Message: Message{MaxChars: connection.MaxChars, Protocol: connection.Protocol}},
+		Message: Message{MaxChars: connection.MaxChars, Protocol: connection.Protocol, Encrypted: connection.Encrypted, KeyHash: keyHash(key)}},
 	))
 	if err != nil {
 		connection.transport.Close()

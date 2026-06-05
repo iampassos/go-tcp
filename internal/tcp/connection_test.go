@@ -1,6 +1,7 @@
 package tcp
 
 import (
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -46,6 +47,7 @@ func TestSend(t *testing.T) {
 		protocol Protocol
 		state    State
 		faults   FaultConfig
+		key      string
 		wantErr  error
 		wantMsg  string
 	}{
@@ -76,6 +78,13 @@ func TestSend(t *testing.T) {
 			wantMsg:  "Hello, World!",
 		},
 		{
+			name:     "when connection is established sends encrypted message",
+			protocol: SelectiveRepeat,
+			state:    ESTABLISHED,
+			key:      "secret",
+			wantMsg:  "Hello, World!",
+		},
+		{
 			name:     "when connection is not established errors",
 			protocol: SelectiveRepeat,
 			state:    CLOSED,
@@ -89,6 +98,10 @@ func TestSend(t *testing.T) {
 
 			clientConn := &Connection{State: tt.state, transport: clientTransport, Protocol: tt.protocol, WindowSize: 5, Seq: 1, MaxChars: 30, Timeout: 20 * time.Millisecond, Faults: tt.faults}
 			serverConn := &Connection{State: ESTABLISHED, transport: serverTransport, Protocol: tt.protocol, WindowSize: 5, Seq: 1, MaxChars: 30}
+			if tt.key != "" {
+				clientConn.enableEncryption(tt.key)
+				serverConn.enableEncryption(tt.key)
+			}
 
 			done := make(chan string, 1)
 			if tt.state == ESTABLISHED {
@@ -284,6 +297,58 @@ func TestDial(t *testing.T) {
 
 			if client.State != tt.state {
 				t.Fatalf("expected state %v, got %v", tt.state, client.State)
+			}
+		})
+	}
+}
+
+func TestDialWithKey(t *testing.T) {
+	tests := []struct {
+		name      string
+		serverKey string
+		clientKey string
+		wantErr   error
+	}{
+		{
+			name:      "errors when keys are different",
+			serverKey: "secret",
+			clientKey: "wrong",
+			wantErr:   ErrEncryptionMismatch,
+		},
+		{
+			name:      "errors when only client uses encryption",
+			clientKey: "secret",
+			wantErr:   ErrEncryptionMismatch,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			listener, err := Listen("0")
+			if err != nil {
+				t.Fatalf("error while listening: %v", err)
+			}
+			defer listener.Close()
+
+			serverErr := make(chan error, 1)
+			go func() {
+				connection, err := listener.AcceptWithKey(5, tt.serverKey)
+				if connection != nil {
+					connection.Close()
+				}
+				serverErr <- err
+			}()
+
+			client, err := DialWithKey(listener.transport.addr(), GoBackN, 30, tt.clientKey)
+			if client != nil {
+				client.Close()
+			}
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("expected error %v, got %v", tt.wantErr, err)
+			}
+
+			if !errors.Is(<-serverErr, tt.wantErr) {
+				t.Fatalf("expected server error %v", tt.wantErr)
 			}
 		})
 	}

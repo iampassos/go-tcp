@@ -7,6 +7,8 @@ var (
 	ErrMaxCharsExceeded         = errors.New("max chars exceeded for this text")
 	ErrMaxCharsMinimum          = errors.New("max chars must be at least 30")
 	ErrInvalidProtocol          = errors.New("protocol must be either gbn or sr")
+	ErrEncryptionMismatch       = errors.New("encryption keys do not match")
+	ErrDecryptFailed            = errors.New("could not decrypt message")
 	ErrSynAckNotReceived        = errors.New("syn/ack flags not received")
 	ErrSynNotReceived           = errors.New("syn flag not received")
 	ErrAckNotReceived           = errors.New("ack flag not received")

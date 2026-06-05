@@ -45,7 +45,11 @@ func main() {
 	scanner.Scan()
 	corruptSegments := parseSegmentList(scanner.Text())
 
-	conn, err := tcp.Dial(server, protocol, maxChars)
+	fmt.Print("Encryption key (default none): ")
+	scanner.Scan()
+	key := scanner.Text()
+
+	conn, err := tcp.DialWithKey(server, protocol, maxChars, key)
 	if err != nil {
 		log.Fatalf("couldn't connect to server: %v", err)
 	}

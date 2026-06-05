@@ -33,8 +33,12 @@ func main() {
 		size = 1
 	}
 
+	fmt.Print("Encryption key (default none): ")
+	scanner.Scan()
+	key := scanner.Text()
+
 	for {
-		connection, err := listener.Accept(size)
+		connection, err := listener.AcceptWithKey(size, key)
 		if err != nil {
 			log.Println("error accepting:", err)
 			continue

@@ -14,23 +14,23 @@ func TestListener(t *testing.T) {
 		{
 			name: "connection is established",
 			segments: []Segment{
-				{Header: Header{Flags: Flags{Syn: true, Ack: false}}},
-				{Header: Header{Flags: Flags{Syn: false, Ack: true}}},
+				withChecksum(Segment{Header: Header{Flags: Flags{Syn: true, Ack: false}}, Message: Message{Protocol: GoBackN, MaxChars: 30}}),
+				withChecksum(Segment{Header: Header{Flags: Flags{Syn: false, Ack: true}}}),
 			},
 			state: ESTABLISHED,
 		},
 		{
 			name: "connection isnt established with first syn false",
 			segments: []Segment{
-				{Header: Header{Flags: Flags{Syn: false, Ack: false}}},
+				withChecksum(Segment{Header: Header{Flags: Flags{Syn: false, Ack: false}}}),
 			},
 			wantErr: true,
 		},
 		{
 			name: "connection isnt established with second ack false",
 			segments: []Segment{
-				{Header: Header{Flags: Flags{Syn: true, Ack: false}}},
-				{Header: Header{Flags: Flags{Syn: false, Ack: false}}},
+				withChecksum(Segment{Header: Header{Flags: Flags{Syn: true, Ack: false}}, Message: Message{Protocol: GoBackN, MaxChars: 30}}),
+				withChecksum(Segment{Header: Header{Flags: Flags{Syn: false, Ack: false}}}),
 			},
 			wantErr: true,
 		},

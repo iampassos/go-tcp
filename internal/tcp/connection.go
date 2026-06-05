@@ -1,10 +1,13 @@
 package tcp
 
 import (
+	"encoding/binary"
+	"hash"
 	"hash/crc32"
 	"log"
 	"math/rand"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -44,7 +47,7 @@ func Dial(addr string, protocol Protocol, maxChars int) (*Connection, error) {
 
 	connection := &Connection{State: CLOSED, transport: clientTransport, ISN: rand.Intn(1000), PeerAddr: addr}
 
-	err = connection.transport.Send(Segment{Header: Header{Flags: Flags{Syn: true}, Seq: connection.ISN}, Message: Message{MaxChars: maxChars, Protocol: protocol}})
+	err = connection.transport.Send(withChecksum(Segment{Header: Header{Flags: Flags{Syn: true}, Seq: connection.ISN}, Message: Message{MaxChars: maxChars, Protocol: protocol}}))
 	if err != nil {
 		return nil, err
 	}
@@ -59,6 +62,9 @@ func Dial(addr string, protocol Protocol, maxChars int) (*Connection, error) {
 	if segment == nil || !segment.Header.Flags.Syn || !segment.Header.Flags.Ack {
 		return nil, ErrSynAckNotReceived
 	}
+	if !ValidChecksum(*segment) {
+		return nil, ErrSynAckNotReceived
+	}
 
 	connection.State = ESTABLISHED
 	connection.Protocol = segment.Message.Protocol
@@ -66,7 +72,7 @@ func Dial(addr string, protocol Protocol, maxChars int) (*Connection, error) {
 	connection.WindowSize = segment.Header.WindowSize
 	connection.Seq = connection.ISN + 1
 
-	err = connection.transport.Send(Segment{Header: Header{Flags: Flags{Ack: true}, Ack: segment.Header.Seq + 1, Seq: segment.Header.Ack}})
+	err = connection.transport.Send(withChecksum(Segment{Header: Header{Flags: Flags{Ack: true}, Ack: segment.Header.Seq + 1, Seq: segment.Header.Ack}}))
 	if err != nil {
 		return nil, err
 	}
@@ -90,51 +96,52 @@ func (c *Connection) Receive() (string, error) {
 			return "", err
 		}
 
-		if segment.Header.Flags.Fin {
-			log.Printf(`[SERVER] Received segment with FIN flag from %v`, c.PeerAddr)
-			break
-		}
-
-		log.Printf(`[SERVER] Received segment with text "%v" and SEQ %v from %v`, segment.Message.Text, segment.Header.Seq, c.PeerAddr)
+		log.Printf(`[SERVER] Received segment metadata: %s from %v`, formatSegmentMetadata(*segment), c.PeerAddr)
 
 		seqNum := segment.Header.Seq
 		if !ValidChecksum(*segment) {
-			err := c.transport.Send(Segment{Header: Header{Flags: Flags{Nak: true}, Ack: seqNum}})
+			err := c.transport.Send(withChecksum(Segment{Header: Header{Flags: Flags{Nak: true}, Ack: seqNum}}))
 			if err != nil {
 				return "", err
 			}
 
-			log.Printf(`[SERVER] Sending segment with NAK %v to %v`, seqNum, c.PeerAddr)
+			log.Printf(`[SERVER] Sending confirmation flags=%+v ack=%v to %v`, Flags{Nak: true}, seqNum, c.PeerAddr)
 			continue
+		}
+
+		if segment.Header.Flags.Fin {
+			log.Printf(`[SERVER] Received segment with FIN flag from %v`, c.PeerAddr)
+			break
 		}
 
 		if c.Protocol == GoBackN {
 			if seqNum == expectedSeq {
 				buffer[seqNum] = segment.Message.Text
 
-				err := c.transport.Send(Segment{Header: Header{Flags: Flags{Ack: true}, Ack: seqNum}})
+				err := c.transport.Send(withChecksum(Segment{Header: Header{Flags: Flags{Ack: true}, Ack: seqNum}}))
 				if err != nil {
 					return "", err
 				}
 
-				log.Printf(`[SERVER] Sending segment with ACK %v to %v`, seqNum, c.PeerAddr)
+				log.Printf(`[SERVER] Sending confirmation flags=%+v ack=%v to %v`, Flags{Ack: true}, seqNum, c.PeerAddr)
 
 				expectedSeq = seqNum + 1
 			} else {
-				err := c.transport.Send(Segment{Header: Header{Flags: Flags{Ack: true}, Ack: expectedSeq - 1}})
+				err := c.transport.Send(withChecksum(Segment{Header: Header{Flags: Flags{Ack: true}, Ack: expectedSeq - 1}}))
 				if err != nil {
 					return "", err
 				}
+				log.Printf(`[SERVER] Sending confirmation flags=%+v ack=%v to %v`, Flags{Ack: true}, expectedSeq-1, c.PeerAddr)
 			}
 		}
 
 		if c.Protocol == SelectiveRepeat {
-			err := c.transport.Send(Segment{Header: Header{Flags: Flags{Ack: true}, Ack: seqNum}})
+			err := c.transport.Send(withChecksum(Segment{Header: Header{Flags: Flags{Ack: true}, Ack: seqNum}}))
 			if err != nil {
 				return "", err
 			}
 
-			log.Printf(`[SERVER] Sending segment with ACK %v to %v`, seqNum, c.PeerAddr)
+			log.Printf(`[SERVER] Sending confirmation flags=%+v ack=%v to %v`, Flags{Ack: true}, seqNum, c.PeerAddr)
 
 			buffer[seqNum] = segment.Message.Text
 		}
@@ -169,7 +176,8 @@ func (c *Connection) Send(text string) error {
 		return ErrConnectionNotEstablished
 	}
 
-	if len(text) > c.MaxChars {
+	runes := []rune(text)
+	if len(runes) > c.MaxChars {
 		return ErrMaxCharsExceeded
 	}
 
@@ -179,9 +187,9 @@ func (c *Connection) Send(text string) error {
 	maxChars := 4
 
 	seq := c.Seq
-	for i := 0; i < len(text); i += maxChars {
-		end := min(i+maxChars, len(text))
-		t := text[i:end]
+	for i := 0; i < len(runes); i += maxChars {
+		end := min(i+maxChars, len(runes))
+		t := string(runes[i:end])
 		segment := Segment{Header: Header{Seq: seq}, Message: Message{Text: t}}
 		segment.Checksum = CalculateChecksum(segment)
 		window = append(window, segment)
@@ -237,6 +245,11 @@ func (c *Connection) Send(text string) error {
 
 		select {
 		case segment := <-c.ackCh:
+			if !ValidChecksum(segment) {
+				log.Printf(`[CLIENT] Ignoring invalid confirmation metadata: %s`, formatSegmentMetadata(segment))
+				continue
+			}
+
 			ackNum := segment.Header.Ack
 			ackIndex := ackNum - c.Seq
 
@@ -245,7 +258,7 @@ func (c *Connection) Send(text string) error {
 			}
 
 			if segment.Header.Flags.Nak {
-				log.Printf(`[CLIENT] Received segment with NAK %v`, ackNum)
+				log.Printf(`[CLIENT] Received confirmation metadata: %s`, formatSegmentMetadata(segment))
 				if c.Protocol == GoBackN {
 					nextSeq = ackIndex
 					continue
@@ -256,7 +269,7 @@ func (c *Connection) Send(text string) error {
 				continue
 			}
 
-			log.Printf(`[CLIENT] Received segment with ACK %v`, ackNum)
+			log.Printf(`[CLIENT] Received confirmation metadata: %s`, formatSegmentMetadata(segment))
 
 			if c.Protocol == GoBackN && ackIndex >= base {
 				for i := base; i <= ackIndex; i++ {
@@ -294,7 +307,7 @@ func (c *Connection) Send(text string) error {
 }
 
 func (c *Connection) CloseWrite() error {
-	err := c.transport.Send(Segment{Header: Header{Flags: Flags{Fin: true}}})
+	err := c.transport.Send(withChecksum(Segment{Header: Header{Flags: Flags{Fin: true}}}))
 	if err != nil {
 		return err
 	}
@@ -326,11 +339,23 @@ func (c *Connection) ensureAckReader(bufferSize int) {
 }
 
 func CalculateChecksum(segment Segment) uint32 {
-	data := []byte(segment.Message.Text)
-	data = append(data, []byte(segment.Message.Protocol)...)
-	data = append(data, byte(segment.Message.MaxChars))
-	data = append(data, byte(segment.Header.Seq), byte(segment.Header.Ack), byte(segment.Header.WindowSize))
-	return crc32.ChecksumIEEE(data)
+	hash := crc32.NewIEEE()
+	writeStringForChecksum(hash, segment.Message.Text)
+	writeStringForChecksum(hash, string(segment.Message.Protocol))
+	writeIntForChecksum(hash, segment.Message.MaxChars)
+	writeIntForChecksum(hash, segment.Header.Seq)
+	writeIntForChecksum(hash, segment.Header.Ack)
+	writeIntForChecksum(hash, segment.Header.WindowSize)
+	writeBoolForChecksum(hash, segment.Header.Flags.Syn)
+	writeBoolForChecksum(hash, segment.Header.Flags.Ack)
+	writeBoolForChecksum(hash, segment.Header.Flags.Nak)
+	writeBoolForChecksum(hash, segment.Header.Flags.Fin)
+	return hash.Sum32()
+}
+
+func withChecksum(segment Segment) Segment {
+	segment.Checksum = CalculateChecksum(segment)
+	return segment
 }
 
 func ValidChecksum(segment Segment) bool {
@@ -349,5 +374,58 @@ func corruptText(text string) string {
 	if text == "" {
 		return "!"
 	}
-	return "!" + text[1:]
+	runes := []rune(text)
+	runes[0] = '!'
+	return string(runes)
+}
+
+func formatSegmentMetadata(segment Segment) string {
+	return "flags=" + formatFlags(segment.Header.Flags) +
+		" seq=" + strconv.Itoa(segment.Header.Seq) +
+		" ack=" + strconv.Itoa(segment.Header.Ack) +
+		" window=" + strconv.Itoa(segment.Header.WindowSize) +
+		" checksum=" + strconv.FormatUint(uint64(segment.Checksum), 10) +
+		" calculatedChecksum=" + strconv.FormatUint(uint64(CalculateChecksum(segment)), 10) +
+		` text="` + segment.Message.Text + `"` +
+		" protocol=" + string(segment.Message.Protocol) +
+		" maxChars=" + strconv.Itoa(segment.Message.MaxChars)
+}
+
+func formatFlags(flags Flags) string {
+	values := make([]string, 0, 4)
+	if flags.Syn {
+		values = append(values, "SYN")
+	}
+	if flags.Ack {
+		values = append(values, "ACK")
+	}
+	if flags.Nak {
+		values = append(values, "NAK")
+	}
+	if flags.Fin {
+		values = append(values, "FIN")
+	}
+	if len(values) == 0 {
+		return "NONE"
+	}
+	return strings.Join(values, "|")
+}
+
+func writeStringForChecksum(hash hash.Hash32, value string) {
+	writeIntForChecksum(hash, len(value))
+	hash.Write([]byte(value))
+}
+
+func writeIntForChecksum(hash hash.Hash32, value int) {
+	var data [8]byte
+	binary.LittleEndian.PutUint64(data[:], uint64(value))
+	hash.Write(data[:])
+}
+
+func writeBoolForChecksum(hash hash.Hash32, value bool) {
+	if value {
+		hash.Write([]byte{1})
+		return
+	}
+	hash.Write([]byte{0})
 }

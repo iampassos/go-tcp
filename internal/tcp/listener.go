@@ -42,6 +42,20 @@ func (l *Listener) Accept(windowSize int) (*Connection, error) {
 		connection.transport.Close()
 		return nil, ErrSynNotReceived
 	}
+	if !ValidChecksum(*segment) {
+		connection.transport.Close()
+		return nil, ErrSynNotReceived
+	}
+
+	if segment.Message.MaxChars < 30 {
+		connection.transport.Close()
+		return nil, ErrMaxCharsMinimum
+	}
+
+	if segment.Message.Protocol != SelectiveRepeat && segment.Message.Protocol != GoBackN {
+		connection.transport.Close()
+		return nil, ErrInvalidProtocol
+	}
 
 	connection.State = SYN_RECEIVED
 	connection.MaxChars = segment.Message.MaxChars
@@ -49,10 +63,10 @@ func (l *Listener) Accept(windowSize int) (*Connection, error) {
 	connection.WindowSize = windowSize
 	connection.Seq = segment.Header.Seq + 1
 
-	err = connection.transport.Send(Segment{
+	err = connection.transport.Send(withChecksum(Segment{
 		Header:  Header{Flags: Flags{Syn: true, Ack: true}, WindowSize: connection.WindowSize, Ack: segment.Header.Seq + 1, Seq: connection.ISN},
 		Message: Message{MaxChars: connection.MaxChars, Protocol: connection.Protocol}},
-	)
+	))
 	if err != nil {
 		connection.transport.Close()
 		return nil, err
@@ -65,6 +79,10 @@ func (l *Listener) Accept(windowSize int) (*Connection, error) {
 	}
 
 	if segment == nil || !segment.Header.Flags.Ack {
+		connection.transport.Close()
+		return nil, ErrAckNotReceived
+	}
+	if !ValidChecksum(*segment) {
 		connection.transport.Close()
 		return nil, ErrAckNotReceived
 	}

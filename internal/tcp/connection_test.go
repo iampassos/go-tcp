@@ -189,7 +189,7 @@ func TestReceive(t *testing.T) {
 						t.Errorf("expected NAK 1, got %v", ack.Header.Ack)
 					}
 
-					serverTransport.in <- Segment{Header: Header{Flags: Flags{Fin: true}}}
+					serverTransport.in <- withChecksum(Segment{Header: Header{Flags: Flags{Fin: true}}})
 				})
 			} else {
 				wg.Go(func() {
@@ -226,22 +226,22 @@ func TestDial(t *testing.T) {
 	}{
 		{
 			name:    "connection is established",
-			segment: Segment{Header: Header{Flags: Flags{Syn: true, Ack: true}}},
+			segment: withChecksum(Segment{Header: Header{Flags: Flags{Syn: true, Ack: true}}}),
 			state:   ESTABLISHED,
 		},
 		{
 			name:    "connection isnt established with syn false",
-			segment: Segment{Header: Header{Flags: Flags{Syn: false, Ack: true}}},
+			segment: withChecksum(Segment{Header: Header{Flags: Flags{Syn: false, Ack: true}}}),
 			wantErr: true,
 		},
 		{
 			name:    "connection isnt established with ack false",
-			segment: Segment{Header: Header{Flags: Flags{Syn: true, Ack: false}}},
+			segment: withChecksum(Segment{Header: Header{Flags: Flags{Syn: true, Ack: false}}}),
 			wantErr: true,
 		},
 		{
 			name:    "connection isnt established with syn/ack false",
-			segment: Segment{Header: Header{Flags: Flags{Syn: false, Ack: false}}},
+			segment: withChecksum(Segment{Header: Header{Flags: Flags{Syn: false, Ack: false}}}),
 			wantErr: true,
 		},
 	}

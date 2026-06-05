@@ -53,10 +53,10 @@ Os objetivos específicos do trabalho são:
 | Tamanho máximo da mensagem definido no início | Implementado | Campo `maxChars` no handshake |
 | Tamanho mínimo de 30 caracteres | Implementado | Validação em `Dial` |
 | Pacotes com no máximo 4 caracteres | Implementado | Fragmentação no envio |
-| Metadados dos segmentos impressos no servidor | Implementado | Logs do servidor |
+| Metadados dos segmentos impressos no servidor | Implementado | Logs do servidor com flags, sequência, janela e checksum |
 | Mensagem completa exibida no servidor | Implementado | Reassemblagem ao receber `FIN` |
-| Metadados das confirmações impressos no cliente | Implementado | Logs de `ACK` e `NAK` |
-| Soma de verificação | Implementado | `Checksum` com CRC32 |
+| Metadados das confirmações impressos no cliente | Implementado | Logs de `ACK` e `NAK` com flags, confirmação, janela e checksum |
+| Soma de verificação | Implementado | `Checksum` com CRC32 cobrindo payload, metadados do cabeçalho e flags |
 | Temporizador | Implementado | Timeout no cliente |
 | Número de sequência | Implementado | Campo `Seq` |
 | Reconhecimento positivo | Implementado | Flag `ACK` |
@@ -255,7 +255,7 @@ segmento correto depois.
 
 ### 9.1 Pré-requisitos
 
-- Go instalado.
+- Go `1.25.7` ou superior instalado, conforme `go.mod`.
 - Dois terminais: um para o servidor e outro para o cliente.
 
 ### 9.2 Executar o Servidor
@@ -405,4 +405,4 @@ processos nos modos Go-Back-N e Repetição Seletiva.
 
 ## Utilização de Inteligência Artificial
 
-A inteligência artificial foi utilizada neste projeto para gerar a documentação (com exceção dessa parte que estou escrevendo) e ajuda em como o protocolo de fato funciona, qual a melhor abordagem de arquitetura, e alguns poucos bugs. Especificamente na entrega final, teve um papel fundamental na construção do código, por ser uma entrega mais díficil do ponto de vista técnico. Em geral, para 90% do projeto a IA funcionou apenas para tirar dúvidas, resolver bugs, e explicar como os algorítimos que o Kurose ensina funcionam.
+A inteligência artificial foi utilizada neste projeto para gerar a documentação (com exceção dessa parte que estou escrevendo) e ajuda em como o protocolo de fato funciona, qual a melhor abordagem de arquitetura, e alguns poucos bugs. Especificamente na entrega final, teve um papel fundamental na construção do código, por ser uma entrega mais díficil do ponto de vista técnico. Em geral, para 75-80% do projeto a IA funcionou apenas para tirar dúvidas, resolver bugs, e explicar como os algorítimos que o Kurose ensina funcionam.

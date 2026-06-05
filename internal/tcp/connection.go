@@ -2,8 +2,6 @@ package tcp
 
 import (
 	"encoding/binary"
-	"hash"
-	"hash/crc32"
 	"log"
 	"math/rand"
 	"sort"
@@ -339,18 +337,7 @@ func (c *Connection) ensureAckReader(bufferSize int) {
 }
 
 func CalculateChecksum(segment Segment) uint32 {
-	hash := crc32.NewIEEE()
-	writeStringForChecksum(hash, segment.Message.Text)
-	writeStringForChecksum(hash, string(segment.Message.Protocol))
-	writeIntForChecksum(hash, segment.Message.MaxChars)
-	writeIntForChecksum(hash, segment.Header.Seq)
-	writeIntForChecksum(hash, segment.Header.Ack)
-	writeIntForChecksum(hash, segment.Header.WindowSize)
-	writeBoolForChecksum(hash, segment.Header.Flags.Syn)
-	writeBoolForChecksum(hash, segment.Header.Flags.Ack)
-	writeBoolForChecksum(hash, segment.Header.Flags.Nak)
-	writeBoolForChecksum(hash, segment.Header.Flags.Fin)
-	return hash.Sum32()
+	return uint32(oneComplementChecksum(checksumBytes(segment)))
 }
 
 func withChecksum(segment Segment) Segment {
@@ -411,21 +398,53 @@ func formatFlags(flags Flags) string {
 	return strings.Join(values, "|")
 }
 
-func writeStringForChecksum(hash hash.Hash32, value string) {
-	writeIntForChecksum(hash, len(value))
-	hash.Write([]byte(value))
+func checksumBytes(segment Segment) []byte {
+	var data []byte
+	data = appendStringForChecksum(data, segment.Message.Text)
+	data = appendStringForChecksum(data, string(segment.Message.Protocol))
+	data = appendIntForChecksum(data, segment.Message.MaxChars)
+	data = appendIntForChecksum(data, segment.Header.Seq)
+	data = appendIntForChecksum(data, segment.Header.Ack)
+	data = appendIntForChecksum(data, segment.Header.WindowSize)
+	data = appendBoolForChecksum(data, segment.Header.Flags.Syn)
+	data = appendBoolForChecksum(data, segment.Header.Flags.Ack)
+	data = appendBoolForChecksum(data, segment.Header.Flags.Nak)
+	data = appendBoolForChecksum(data, segment.Header.Flags.Fin)
+	return data
 }
 
-func writeIntForChecksum(hash hash.Hash32, value int) {
-	var data [8]byte
-	binary.LittleEndian.PutUint64(data[:], uint64(value))
-	hash.Write(data[:])
+func appendStringForChecksum(data []byte, value string) []byte {
+	data = appendIntForChecksum(data, len(value))
+	return append(data, []byte(value)...)
 }
 
-func writeBoolForChecksum(hash hash.Hash32, value bool) {
+func appendIntForChecksum(data []byte, value int) []byte {
+	var encoded [8]byte
+	binary.BigEndian.PutUint64(encoded[:], uint64(value))
+	return append(data, encoded[:]...)
+}
+
+func appendBoolForChecksum(data []byte, value bool) []byte {
 	if value {
-		hash.Write([]byte{1})
-		return
+		return append(data, 1)
 	}
-	hash.Write([]byte{0})
+	return append(data, 0)
+}
+
+func oneComplementChecksum(data []byte) uint16 {
+	var sum uint32
+	for i := 0; i < len(data); i += 2 {
+		word := uint16(data[i]) << 8
+		if i+1 < len(data) {
+			word |= uint16(data[i+1])
+		}
+		sum += uint32(word)
+		sum = (sum & 0xffff) + (sum >> 16)
+	}
+
+	for sum>>16 != 0 {
+		sum = (sum & 0xffff) + (sum >> 16)
+	}
+
+	return ^uint16(sum)
 }

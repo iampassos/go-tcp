@@ -56,7 +56,7 @@ Os objetivos específicos do trabalho são:
 | Metadados dos segmentos impressos no servidor | Implementado | Logs do servidor com flags, sequência, janela e checksum |
 | Mensagem completa exibida no servidor | Implementado | Reassemblagem ao receber `FIN` |
 | Metadados das confirmações impressos no cliente | Implementado | Logs de `ACK` e `NAK` com flags, confirmação, janela e checksum |
-| Soma de verificação | Implementado | `Checksum` com CRC32 cobrindo payload, metadados do cabeçalho e flags |
+| Soma de verificação | Implementado | `Checksum` de 16 bits com complemento de 1, como no Kurose, cobrindo payload, metadados do cabeçalho e flags |
 | Temporizador | Implementado | Timeout no cliente |
 | Número de sequência | Implementado | Campo `Seq` |
 | Reconhecimento positivo | Implementado | Flag `ACK` |

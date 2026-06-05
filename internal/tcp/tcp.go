@@ -32,6 +32,7 @@ type Message struct {
 type Flags struct {
 	Syn bool
 	Ack bool
+	Nak bool
 	Fin bool
 }
 
@@ -43,6 +44,12 @@ type Header struct {
 }
 
 type Segment struct {
-	Header  Header
-	Message Message
+	Header   Header
+	Message  Message
+	Checksum uint32
+}
+
+type FaultConfig struct {
+	DropSegments    []int
+	CorruptSegments []int
 }

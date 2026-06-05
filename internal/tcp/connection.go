@@ -1,11 +1,13 @@
 package tcp
 
 import (
+	"hash/crc32"
 	"log"
 	"math/rand"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Connection struct {
@@ -17,7 +19,14 @@ type Connection struct {
 	MaxChars   int
 	WindowSize int
 	Seq        int
+	Timeout    time.Duration
+	Faults     FaultConfig
+	ackOnce    sync.Once
+	ackCh      chan Segment
+	ackErrCh   chan error
 }
+
+const defaultTimeout = time.Second
 
 func Dial(addr string, protocol Protocol, maxChars int) (*Connection, error) {
 	if maxChars < 30 {
@@ -89,12 +98,21 @@ func (c *Connection) Receive() (string, error) {
 		log.Printf(`[SERVER] Received segment with text "%v" and SEQ %v from %v`, segment.Message.Text, segment.Header.Seq, c.PeerAddr)
 
 		seqNum := segment.Header.Seq
+		if !ValidChecksum(*segment) {
+			err := c.transport.Send(Segment{Header: Header{Flags: Flags{Nak: true}, Ack: seqNum}})
+			if err != nil {
+				return "", err
+			}
+
+			log.Printf(`[SERVER] Sending segment with NAK %v to %v`, seqNum, c.PeerAddr)
+			continue
+		}
 
 		if c.Protocol == GoBackN {
 			if seqNum == expectedSeq {
 				buffer[seqNum] = segment.Message.Text
 
-				err := c.transport.Send(Segment{Header{Ack: seqNum}, Message{}})
+				err := c.transport.Send(Segment{Header: Header{Flags: Flags{Ack: true}, Ack: seqNum}})
 				if err != nil {
 					return "", err
 				}
@@ -103,7 +121,7 @@ func (c *Connection) Receive() (string, error) {
 
 				expectedSeq = seqNum + 1
 			} else {
-				err := c.transport.Send(Segment{Header{Ack: expectedSeq - 1}, Message{}})
+				err := c.transport.Send(Segment{Header: Header{Flags: Flags{Ack: true}, Ack: expectedSeq - 1}})
 				if err != nil {
 					return "", err
 				}
@@ -111,7 +129,7 @@ func (c *Connection) Receive() (string, error) {
 		}
 
 		if c.Protocol == SelectiveRepeat {
-			err := c.transport.Send(Segment{Header{Ack: seqNum}, Message{}})
+			err := c.transport.Send(Segment{Header: Header{Flags: Flags{Ack: true}, Ack: seqNum}})
 			if err != nil {
 				return "", err
 			}
@@ -164,64 +182,111 @@ func (c *Connection) Send(text string) error {
 	for i := 0; i < len(text); i += maxChars {
 		end := min(i+maxChars, len(text))
 		t := text[i:end]
-		window = append(window, Segment{Header{Seq: seq}, Message{Text: t}})
+		segment := Segment{Header: Header{Seq: seq}, Message: Message{Text: t}}
+		segment.Checksum = CalculateChecksum(segment)
+		window = append(window, segment)
 		seq++
 	}
 
-	var wg sync.WaitGroup
-	ch := make(chan int, len(window))
+	timeout := c.Timeout
+	if timeout <= 0 {
+		timeout = defaultTimeout
+	}
+
 	base := 0
 	nextSeq := 0
+	acked := make([]bool, len(window))
+	c.ensureAckReader(len(window) * 4)
 
-	wg.Go(func() {
-		for nextSeq < len(window) {
-			if nextSeq < base+c.WindowSize {
-				segment := window[nextSeq]
-				err := c.transport.Send(segment)
-				if err != nil {
-					return
-				}
+	dropped := setFromInts(c.Faults.DropSegments)
+	corrupted := setFromInts(c.Faults.CorruptSegments)
 
-				log.Printf(`[CLIENT] Sending segment with text "%v" and SEQ %v`, segment.Message.Text, segment.Header.Seq)
-				nextSeq++
-			} else {
-				<-ch
-			}
+	sendSegment := func(index int) error {
+		segment := window[index]
+		segmentNumber := index + 1
+		seqNum := segment.Header.Seq
+
+		if dropped[segmentNumber] {
+			delete(dropped, segmentNumber)
+			log.Printf(`[CLIENT] Simulating loss of message segment %v with text "%v" and SEQ %v`, segmentNumber, segment.Message.Text, seqNum)
+			return nil
 		}
-	})
 
-	buffer := make([]bool, len(window))
+		if corrupted[segmentNumber] {
+			delete(corrupted, segmentNumber)
+			segment.Message.Text = corruptText(segment.Message.Text)
+			log.Printf(`[CLIENT] Simulating corruption of message segment %v with SEQ %v`, segmentNumber, seqNum)
+		}
 
-	wg.Go(func() {
-		for base < len(window) {
-			segment, err := c.transport.Receive()
-			if err != nil {
-				return
+		err := c.transport.Send(segment)
+		if err != nil {
+			return err
+		}
+
+		log.Printf(`[CLIENT] Sending segment with text "%v" and SEQ %v`, segment.Message.Text, seqNum)
+		return nil
+	}
+
+	for base < len(window) {
+		for nextSeq < len(window) && nextSeq < base+c.WindowSize {
+			if err := sendSegment(nextSeq); err != nil {
+				return err
 			}
+			nextSeq++
+		}
 
+		select {
+		case segment := <-c.ackCh:
 			ackNum := segment.Header.Ack
 			ackIndex := ackNum - c.Seq
 
-			log.Printf(`[CLIENT] Received segment with ACK %v`, segment.Header.Ack)
-
-			if c.Protocol == GoBackN {
-				if ackIndex >= base {
-					base = ackIndex + 1
-					ch <- base
-				}
+			if ackIndex < 0 || ackIndex >= len(window) {
+				continue
 			}
 
+			if segment.Header.Flags.Nak {
+				log.Printf(`[CLIENT] Received segment with NAK %v`, ackNum)
+				if c.Protocol == GoBackN {
+					nextSeq = ackIndex
+					continue
+				}
+				if err := sendSegment(ackIndex); err != nil {
+					return err
+				}
+				continue
+			}
+
+			log.Printf(`[CLIENT] Received segment with ACK %v`, ackNum)
+
+			if c.Protocol == GoBackN && ackIndex >= base {
+				for i := base; i <= ackIndex; i++ {
+					acked[i] = true
+				}
+				base = ackIndex + 1
+			}
 			if c.Protocol == SelectiveRepeat {
-				buffer[ackIndex] = true
-				for base < len(window) && buffer[base] {
+				acked[ackIndex] = true
+				for base < len(window) && acked[base] {
 					base++
 				}
-				ch <- base
+			}
+		case err := <-c.ackErrCh:
+			return err
+		case <-time.After(timeout):
+			log.Printf(`[CLIENT] Timeout waiting for ACK at SEQ %v`, window[base].Header.Seq)
+			if c.Protocol == GoBackN {
+				nextSeq = base
+				continue
+			}
+			for i := base; i < nextSeq; i++ {
+				if !acked[i] {
+					if err := sendSegment(i); err != nil {
+						return err
+					}
+				}
 			}
 		}
-	})
-
-	wg.Wait()
+	}
 
 	c.Seq += len(window)
 
@@ -241,4 +306,48 @@ func (c *Connection) Close() error {
 	log.Printf("[HOST] Connection closed with %v", c.PeerAddr)
 
 	return c.transport.Close()
+}
+
+func (c *Connection) ensureAckReader(bufferSize int) {
+	c.ackOnce.Do(func() {
+		c.ackCh = make(chan Segment, bufferSize)
+		c.ackErrCh = make(chan error, 1)
+		go func() {
+			for {
+				segment, err := c.transport.Receive()
+				if err != nil {
+					c.ackErrCh <- err
+					return
+				}
+				c.ackCh <- *segment
+			}
+		}()
+	})
+}
+
+func CalculateChecksum(segment Segment) uint32 {
+	data := []byte(segment.Message.Text)
+	data = append(data, []byte(segment.Message.Protocol)...)
+	data = append(data, byte(segment.Message.MaxChars))
+	data = append(data, byte(segment.Header.Seq), byte(segment.Header.Ack), byte(segment.Header.WindowSize))
+	return crc32.ChecksumIEEE(data)
+}
+
+func ValidChecksum(segment Segment) bool {
+	return segment.Checksum == CalculateChecksum(segment)
+}
+
+func setFromInts(values []int) map[int]bool {
+	set := make(map[int]bool, len(values))
+	for _, value := range values {
+		set[value] = true
+	}
+	return set
+}
+
+func corruptText(text string) string {
+	if text == "" {
+		return "!"
+	}
+	return "!" + text[1:]
 }
